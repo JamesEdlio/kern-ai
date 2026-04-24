@@ -13,6 +13,7 @@ import { registerAgent, writePidFile, removePidFile, assignPort } from "./regist
 import { AgentServer } from "./server.js";
 import { PairingManager } from "./pairing.js";
 import { setMessageSender } from "./tools/message.js";
+import { setReactor } from "./tools/react.js";
 import { SegmentIndex } from "./segments.js";
 import { MemoryDB } from "./memory.js";
 import { MessageQueue } from "./queue.js";
@@ -220,7 +221,10 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   queue.setHandler(async (msg, getPendingMessages) => {
 
     const time = formatLocalISO(new Date(), envelopeTimezone);
-    const context = `[via ${msg.interface}${msg.channel ? `, ${msg.channel}` : ""}, user: ${msg.userId}, time: ${time}]\n${msg.text}`;
+    const idParts = [];
+    if (msg.ts) idParts.push(`ts: ${msg.ts}`);
+    const idSuffix = idParts.length ? `, ${idParts.join(", ")}` : "";
+    const context = `[via ${msg.interface}${msg.channel ? `, ${msg.channel}` : ""}, user: ${msg.userId}${idSuffix}, time: ${time}]\n${msg.text}`;
 
     // Broadcast incoming to other clients.
     // Messages from /message POST (web, tui) are already broadcast by the server
@@ -240,10 +244,15 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     // Set up prepareStep injection for same-channel messages
     runtime.setPendingInjections(() => {
       const pending = getPendingMessages();
-      return pending.map((p) => ({
-        role: "user",
-        content: `[via ${p.interface}${p.channel ? `, ${p.channel}` : ""}, user: ${p.userId}, time: ${formatLocalISO(new Date(), envelopeTimezone)}]\n${p.text}`,
-      }));
+      return pending.map((p) => {
+        const idParts = [];
+        if (p.ts) idParts.push(`ts: ${p.ts}`);
+        const idSuffix = idParts.length ? `, ${idParts.join(", ")}` : "";
+        return {
+          role: "user" as const,
+          content: `[via ${p.interface}${p.channel ? `, ${p.channel}` : ""}, user: ${p.userId}${idSuffix}, time: ${formatLocalISO(new Date(), envelopeTimezone)}]\n${p.text}`,
+        };
+      });
     });
 
     const result = await runtime.handleMessage(context, (event: StreamEvent) => {
@@ -269,7 +278,15 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
   });
 
   // Helper to enqueue from any interface
-  const enqueueMessage = async (text: string, userId: string, iface: string, channel: string, onEvent?: (e: StreamEvent) => void, attachments?: import("./interfaces/types.js").Attachment[]) => {
+  const enqueueMessage = async (
+    text: string,
+    userId: string,
+    iface: string,
+    channel: string,
+    onEvent?: (e: StreamEvent) => void,
+    attachments?: import("./interfaces/types.js").Attachment[],
+    extra?: { ts?: string },
+  ) => {
     // Slash commands bypass the queue — instant response even if queue is busy
     const cmd = text.trim();
     if (cmd.startsWith("/")) {
@@ -283,7 +300,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
         return result;
       }
     }
-    return queue.enqueue({ text, userId, interface: iface, channel, attachments }, onEvent);
+    return queue.enqueue({ text, userId, interface: iface, channel, attachments, ts: extra?.ts }, onEvent);
   };
 
   server.setStatusFn(() => {
@@ -437,7 +454,7 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
     slackBot = new SlackInterface(slackBotToken, slackAppToken, pairing);
     await slackBot.start({
       onMessage: async (msg, onEvent) => {
-        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", undefined, msg.attachments);
+        return enqueueMessage(msg.text, msg.userId, msg.interface, msg.channel || "", undefined, msg.attachments, { ts: msg.ts });
       },
     });
   }
@@ -513,6 +530,14 @@ export async function startApp(agentDir: string, forceCli = false): Promise<void
         });
       }
       return sent;
+    }
+    return false;
+  });
+
+  // Wire react tool — agent can add emoji reactions (Slack only for now)
+  setReactor(async (channelId: string, timestamp: string, name: string, iface: string) => {
+    if (iface === "slack" && slackBot) {
+      return slackBot.react(channelId, timestamp, name);
     }
     return false;
   });

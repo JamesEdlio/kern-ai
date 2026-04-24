@@ -11,6 +11,8 @@ export interface QueuedMessage {
   onEvent?: (event: StreamEvent) => void;
   isHeartbeat?: boolean;
   attachments?: Attachment[];
+  /** Platform-specific message id (Slack `ts`) for tools that target specific messages (e.g. `react`). */
+  ts?: string;
 }
 
 import { log } from "./log.js";

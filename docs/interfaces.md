@@ -15,10 +15,13 @@ Examples from human interfaces:
 ```
 [via telegram, telegram:12345, user: 8105113489, time: 2026-04-06T14:30:00-07:00]
 [via slack, #engineering, user: U04ABC, time: 2026-04-06T14:30:00-07:00]
+[via slack, #engineering, user: U04ABC, ts: 1713967821.123456, time: 2026-04-06T14:30:00-07:00]
 [via matrix, matrix:!abc:example.com, user: @oguz:example.com, time: 2026-04-16T21:00:00-07:00]
 [via web, web, user: tui, time: 2026-04-06T14:30:00-07:00]
 [via tui, tui, user: tui, time: 2026-04-06T14:30:00-07:00]
 ```
+
+Interfaces MAY append extra identifier fields after `user:` (before `time:`). Slack adds `ts:` (this message's id) so tools like `react` can target a specific message.
 
 Examples from system-generated messages (heartbeats, sub-agent announces):
 
@@ -68,6 +71,7 @@ Messages enter the runtime via two paths:
 | `interface` | `string` | yes | Interface name — for example `telegram`, `slack`, `matrix`, `cli` |
 | `channel` | `string` | no | Human-readable channel label used in the text prefix and SSE events |
 | `attachments` | `Attachment[]` | no | Media files attached to the message |
+| `ts` | `string` | no | Platform-specific message id (Slack `ts`). Surfaced in the envelope as `ts:`. |
 
 **HTTP clients** (web UI, TUI) POST to the agent's `/message` endpoint with a flat JSON payload. The server maps fields directly into the runtime; there is no `chatId` on this path.
 
@@ -228,6 +232,7 @@ Socket Mode connection. No public URL needed.
    - `chat:write`, `channels:read`, `channels:history`
    - `groups:read`, `groups:history`
    - `im:read`, `im:write`, `im:history`
+   - `reactions:write` (for the `react` tool — optional but recommended)
 4. Install the app to your workspace — get bot token (`xoxb-...`)
 5. Subscribe to bot events:
    - `message.channels`, `message.groups`, `message.im`
@@ -244,6 +249,8 @@ Socket Mode connection. No public URL needed.
 - **DMs**: pairing required. Unpaired users get a code.
 - **Channels**: reads ALL messages, only responds when @mentioned or directly relevant. Returns `NO_REPLY` to suppress.
 - **Replies**: post directly to channel or DM (no threading).
+- **Reactions**: when the `reactions:write` scope is granted, the `react` tool can add emoji reactions to specific messages. Useful as a lightweight "I saw this" that doesn't clutter channels.
+- **Envelope**: inbound messages surface the Slack `ts` of the incoming message as an extra envelope field (`ts:`). The agent uses this as the `timestamp` argument when calling the `react` tool.
 - Graceful shutdown: Socket Mode closes cleanly on SIGTERM.
 
 ## Matrix

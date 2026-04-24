@@ -2,6 +2,11 @@
 
 ## next
 
+### Features
+- **Slack reactions** — new `react` tool lets the agent add emoji reactions to Slack messages (`react({ channelId, timestamp, name })`). Useful as a silent acknowledgement without cluttering a channel — prefer it over `NO_REPLY` when you want to show you saw something. Requires the new `reactions:write` bot scope.
+  - Envelope: Slack inbound messages now include `ts:` (the message id) between `user:` and `time:` so the agent can pass it as the reaction `timestamp`. Interfaces may append further key/value identifiers in the same slot; the envelope contract is extended rather than broken.
+  - Slack reply behavior unchanged — replies still post flat to the channel/DM.
+
 ## v0.31.1
 
 ### Improvements

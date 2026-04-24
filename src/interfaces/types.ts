@@ -35,6 +35,13 @@ export interface IncomingMessage {
   interface: string;
   /** Human-readable channel label used in the agent-facing text prefix and SSE broadcast events. */
   channel?: string;
+  /**
+   * Platform-specific identifier for this message (e.g. Slack `ts`). Optional;
+   * populated only by interfaces that expose per-message IDs. Surfaced to the
+   * agent as part of the text-prefix envelope so tools (e.g. `react`) can
+   * target specific messages.
+   */
+  ts?: string;
   /** Media files attached to the message. */
   attachments?: Attachment[];
 }

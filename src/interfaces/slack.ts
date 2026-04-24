@@ -87,7 +87,6 @@ export class SlackInterface implements Interface {
         } catch {}
       }
       const channelId = message.channel;
-      const threadTs = ("thread_ts" in message ? message.thread_ts : undefined) as string | undefined;
 
       // Download file attachments
       const attachments: Attachment[] = [];
@@ -170,6 +169,7 @@ export class SlackInterface implements Interface {
             chatId: channelId,
             interface: "slack",
             channel: channelLabel,
+            ts: message.ts as string | undefined,
             attachments: attachments.length > 0 ? attachments : undefined,
           },
           () => {}, // events handled by SSE broadcast in app.ts
@@ -196,7 +196,10 @@ export class SlackInterface implements Interface {
     await this.app.stop();
   }
 
-  async sendToUser(channelId: string, text: string): Promise<boolean> {
+  async sendToUser(
+    channelId: string,
+    text: string,
+  ): Promise<boolean> {
     try {
       await this.app.client.chat.postMessage({
         channel: channelId,
@@ -204,6 +207,30 @@ export class SlackInterface implements Interface {
       });
       return true;
     } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Add an emoji reaction to a message. `timestamp` is Slack's per-message
+   * `ts` identifier (surfaced to the agent via the `ts:` envelope field on
+   * inbound messages). `name` is the emoji name without colons, e.g. `white_check_mark`.
+   * Requires the `reactions:write` bot scope.
+   */
+  async react(channelId: string, timestamp: string, name: string): Promise<boolean> {
+    try {
+      // strip surrounding colons if the model included them
+      const emoji = name.replace(/^:|:$/g, "");
+      await this.app.client.reactions.add({
+        channel: channelId,
+        timestamp,
+        name: emoji,
+      });
+      return true;
+    } catch (err: any) {
+      // already_reacted is benign — treat as success
+      if (err?.data?.error === "already_reacted") return true;
+      log.warn("slack", `reactions.add failed: ${err?.data?.error || err?.message || err}`);
       return false;
     }
   }

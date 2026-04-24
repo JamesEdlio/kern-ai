@@ -11,6 +11,7 @@ import { pdfTool } from "./pdf.js";
 import { imageTool } from "./image.js";
 import { kernTool } from "./kern.js";
 import { messageTool } from "./message.js";
+import { reactTool } from "./react.js";
 
 const isWindows = process.platform === "win32";
 
@@ -28,6 +29,7 @@ export const allTools = {
   image: imageTool,
   kern: kernTool,
   message: messageTool,
+  react: reactTool,
 };
 
 export type ToolName = keyof typeof allTools;

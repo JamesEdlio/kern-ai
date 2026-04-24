@@ -189,10 +189,29 @@ Send a message to a user on any channel.
 message({ userId: "12345", interface: "telegram", text: "Hello!" })
 ```
 
-- `userId` — from USERS.md or pairing data
+- `userId` — from USERS.md or pairing data. For Slack, may also be a channel ID (e.g. `C0123ABC`) when posting to a channel.
 - `interface` — `telegram`, `slack`, or `matrix`
 - Looks up chatId from pairing data
 - Broadcasts outgoing event to TUI
+
+## react
+
+Add an emoji reaction to a Slack message. Useful for silently acknowledging a status ping without posting a reply — prefer this over `NO_REPLY` when you want to show you saw something.
+
+```
+react({
+  channelId: "C0123ABC",            // from envelope
+  timestamp: "1713967821.123456",   // from envelope `ts:` field
+  name: "white_check_mark",         // emoji name, no colons
+})
+```
+
+- `channelId` — Slack channel ID or name
+- `timestamp` — message `ts` from the inbound envelope
+- `name` — emoji name (no surrounding colons)
+- `interface` — defaults to `slack`; only Slack is supported
+
+Requires the `reactions:write` bot scope on the Slack app.
 
 ## recall
 
