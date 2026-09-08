@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.34.0 (2026-09-08)
 
 ### Features
-- **Your agent is on IRC** — chat with your agent from any IRC client or self-hosted server. Point `IRC_URL` at your network (`ircs://myagent:pass@irc.example.com:6697/#homelab`) and the agent joins, registers with NickServ, and listens. Private messages use pairing like Telegram; shared channels stay open with leading mentions stripped automatically so multiple agents can collaborate.
-- **Your agent is on Nostr** — direct-message your agent from any Nostr client using encrypted DMs. Give it `NOSTR_NSEC` and it listens across public relays with automatic deduplication, gift-wrap encryption (NIP-17 / NIP-44), and no servers to maintain.
-- **Autonomous IRC management** — a built-in `irc` tool and bundled `irc-setup` skill let the agent probe IRC servers, register accounts with NickServ, configure its own URL, and send IRC protocol commands (`send`) on the fly (joining/parting channels, NickServ authentication, WHOIS, NAMES, TOPIC, MODE) with responses captured and returned directly to the model.
-- **Self-provisioning Nostr identity** — with the bundled `nostr-setup` skill, the agent generates its own keypair, secures its `nsec`, and shares its `npub` for instant pairing.
+- **Your agent is on IRC** ([#329](https://github.com/oguzbilgic/kern-ai/pull/329)) — chat with your agent from any IRC client or self-hosted server. Point `IRC_URL` at your network (`ircs://myagent:pass@irc.example.com:6697/#homelab`) and the agent joins, registers with NickServ, and listens. Private messages use pairing like Telegram; shared channels stay open with leading mentions stripped automatically so multiple agents can collaborate.
+- **Your agent is on Nostr** ([#328](https://github.com/oguzbilgic/kern-ai/pull/328)) — direct-message your agent from any Nostr client using encrypted DMs. Give it `NOSTR_NSEC` and it listens across public relays with automatic deduplication, gift-wrap encryption (NIP-17 / NIP-44), and no servers to maintain.
+- **Autonomous IRC management** ([#330](https://github.com/oguzbilgic/kern-ai/pull/330)) — a built-in `irc` tool and bundled `irc-setup` skill let the agent probe IRC servers, register accounts with NickServ, configure its own URL, and send IRC protocol commands (`send`) on the fly (joining/parting channels, NickServ authentication, WHOIS, NAMES, TOPIC, MODE) with responses captured and returned directly to the model.
+- **Self-provisioning Nostr identity** ([#328](https://github.com/oguzbilgic/kern-ai/pull/328)) — with the bundled `nostr-setup` skill, the agent generates its own keypair, secures its `nsec`, and shares its `npub` for instant pairing.
 
 ### Behaviour Changes
 - **Quiet in shared rooms** — agents in group chats and channels (Slack, Matrix, IRC) now follow strict room etiquette: they follow ongoing conversation context, speak only when addressed or actively needed, exit promptly with `NO_REPLY` when finished, and never get caught in infinite reply loops with other bots.
