@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.34.1 (2026-09-09)
 
 ### Improvements
 - **Cheaper and faster background memory summaries** ([#331](https://github.com/oguzbilgic/kern-ai/pull/331)) — OpenRouter default `summaryModel` is now `google/gemini-2.5-flash-lite` (previously `openai/gpt-4.1-mini`). Drops recurring background segment summarization cost by ~75% ($0.10 / $0.40 per 1M tokens vs $0.40 / $1.60) with near-instant throughput and reliable structured bullet summaries.
