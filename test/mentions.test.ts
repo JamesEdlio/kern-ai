@@ -6,11 +6,11 @@ import {
   escapeRegex,
   formatObserved,
   mentionsName,
-  stripMention,
   MAX_OBSERVED_CHARS,
+  MAX_OBSERVED_CHANNELS,
 } from "../src/mentions.js";
 import { stripReplyFallback } from "../src/interfaces/matrix.js";
-import { isAddressedTo } from "../src/interfaces/telegram.js";
+import { isAddressedTo, mentionEntities, stripBotMention } from "../src/interfaces/telegram.js";
 
 // ---------------------------------------------------------------------------
 // Name matching
@@ -38,13 +38,6 @@ test("escapeRegex: regex metacharacters in a nick are literal", () => {
   assert.ok(mentionsName("hi a.b", "a.b"));
   assert.ok(!mentionsName("hi axb", "a.b"), "the dot is not a wildcard");
   assert.equal(escapeRegex("a+b"), "a\\+b");
-});
-
-test("stripMention: removes a leading address and inline mentions", () => {
-  assert.equal(stripMention("vega: status?", "vega"), "status?");
-  assert.equal(stripMention("vega, status?", "vega"), "status?");
-  assert.equal(stripMention("hey @vega look at this", "vega"), "hey  look at this".trim());
-  assert.equal(stripMention("vega", "vega"), "", "a bare mention strips to nothing");
 });
 
 // ---------------------------------------------------------------------------
@@ -122,13 +115,6 @@ test("gate: a zero-size buffer keeps gating but stores nothing", () => {
   const gate = new MentionGate(true, 0);
   gate.observe("#ops", "ada", "chatter");
   assert.equal(gate.active, true);
-  assert.equal(gate.withContext("#ops", "hi"), "hi");
-});
-
-test("gate: clear drops a channel's buffer without folding it in", () => {
-  const gate = new MentionGate(true);
-  gate.observe("#ops", "ada", "chatter");
-  gate.clear("#ops");
   assert.equal(gate.withContext("#ops", "hi"), "hi");
 });
 
@@ -216,4 +202,109 @@ test("telegram: a text_mention entity pointing at the bot addresses it", () => {
 test("telegram: with no resolved identity, nothing looks addressed", () => {
   assert.ok(!isAddressedTo({ text: "@vega_bot hi" }, 0, ""));
   assert.ok(!isAddressedTo(undefined, 42, "vega_bot"));
+});
+
+test("telegram: a handle inside a URL or email is not a mention", () => {
+  assert.ok(
+    !isAddressedTo({ text: "see https://x.com/@vega_bot/status/1" }, 42, "vega_bot"),
+    "a handle in a URL path is not someone addressing us",
+  );
+  assert.ok(!isAddressedTo({ text: "mail ops@vega_bot.example.com" }, 42, "vega_bot"));
+});
+
+test("telegram: entities decide when Telegram sends them", () => {
+  const text = "@vega_bot look";
+  const msg = { text, entities: [{ type: "mention", offset: 0, length: 9 }] };
+  assert.ok(isAddressedTo(msg, 42, "vega_bot"));
+
+  const other = "@someone_else look";
+  assert.ok(
+    !isAddressedTo({ text: other, entities: [{ type: "mention", offset: 0, length: 14 }] }, 42, "vega_bot"),
+    "someone else's mention is not ours",
+  );
+
+  const cmd = "/status@vega_bot";
+  assert.ok(
+    isAddressedTo({ text: cmd, entities: [{ type: "bot_command", offset: 0, length: cmd.length }] }, 42, "vega_bot"),
+  );
+});
+
+test("mentionEntities: merges text and caption entities", () => {
+  assert.deepEqual(mentionEntities(undefined), []);
+  assert.equal(
+    mentionEntities({ entities: [{ type: "mention" }], caption_entities: [{ type: "url" }] }).length,
+    2,
+  );
+});
+
+test("stripBotMention: removes our handle and leaves the message intact", () => {
+  const text = "@vega_bot check the logs";
+  const entities = [{ type: "mention", offset: 0, length: 9 }];
+  assert.equal(stripBotMention(text, entities, "vega_bot"), "check the logs");
+  assert.equal(stripBotMention(text, [], "vega_bot"), "check the logs", "regex fallback matches");
+  assert.equal(stripBotMention("vega_bot", [], "vega_bot"), "vega_bot", "a bare name is not a handle");
+});
+
+test("stripBotMention: newlines and indentation survive", () => {
+  const text = "@vega_bot fix this:\n\nfunction f() {\n    return 1;\n}";
+  const stripped = stripBotMention(text, [{ type: "mention", offset: 0, length: 9 }], "vega_bot");
+  assert.equal(stripped, "fix this:\n\nfunction f() {\n    return 1;\n}");
+});
+
+test("stripBotMention: URLs and emails containing the handle are untouched", () => {
+  const text = "@vega_bot summarize https://x.com/@vega_bot/status/1";
+  const entities = [
+    { type: "mention", offset: 0, length: 9 },
+    { type: "url", offset: 20, length: 31 },
+  ];
+  assert.equal(
+    stripBotMention(text, entities, "vega_bot"),
+    "summarize https://x.com/@vega_bot/status/1",
+  );
+  assert.equal(
+    stripBotMention("summarize https://x.com/@vega_bot/status/1", [], "vega_bot"),
+    "summarize https://x.com/@vega_bot/status/1",
+    "the fallback pattern also leaves the URL alone",
+  );
+  assert.equal(
+    stripBotMention("mail ops@vega_bot.example.com", [], "vega_bot"),
+    "mail ops@vega_bot.example.com",
+  );
+});
+
+test("stripBotMention: a command keeps its slash so the router still sees it", () => {
+  const cmd = "/status@vega_bot";
+  assert.equal(
+    stripBotMention(cmd, [{ type: "bot_command", offset: 0, length: cmd.length }], "vega_bot"),
+    "/status",
+  );
+  assert.equal(stripBotMention(cmd, [], "vega_bot"), "/status", "regex fallback too");
+});
+
+test("gate: a slash command is never wrapped in observed context", () => {
+  const gate = new MentionGate(true);
+  gate.observe("#ops", "ada", "standup in 5");
+  assert.equal(gate.withContext("#ops", "/status"), "/status", "the command stays a command");
+  assert.equal(gate.pending("#ops"), 1, "context is kept for the next real turn");
+  assert.match(gate.withContext("#ops", "what happened?"), /standup in 5/);
+});
+
+test("gate: the channel map is bounded", () => {
+  const gate = new MentionGate(true, 5);
+  for (let i = 0; i < MAX_OBSERVED_CHANNELS + 20; i++) gate.observe(`#c${i}`, "ada", "hi");
+  assert.equal(gate.pending("#c0"), 0, "the oldest channel was evicted");
+  assert.equal(gate.pending(`#c${MAX_OBSERVED_CHANNELS + 19}`), 1, "the newest is kept");
+});
+
+test("stripBotMention: removing a mid-sentence handle leaves single spacing", () => {
+  const text = "hey @vega_bot check the logs";
+  const entities = [{ type: "mention", offset: 4, length: 9 }];
+  assert.equal(stripBotMention(text, entities, "vega_bot"), "hey check the logs");
+  assert.equal(stripBotMention(text, [], "vega_bot"), "hey check the logs", "fallback matches");
+});
+
+test("stripBotMention: entities present but none of ours strips nothing", () => {
+  const text = "thanks, see https://x.com/@vega_bot";
+  const entities = [{ type: "url", offset: 12, length: 23 }];
+  assert.equal(stripBotMention(text, entities, "vega_bot"), text);
 });

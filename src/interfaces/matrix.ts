@@ -20,6 +20,9 @@ import { MentionGate, SentIds, mentionsName } from "../mentions.js";
  *   MATRIX_USER_ID        e.g. @vega:matrix
  *   MATRIX_ACCESS_TOKEN   from login/register
  */
+/** How long a joined-member count is trusted before it is re-fetched. */
+const MEMBER_COUNT_TTL = 5 * 60 * 1000;
+
 export class MatrixInterface implements Interface {
   private homeserver: string;
   private userId: string;
@@ -30,8 +33,8 @@ export class MatrixInterface implements Interface {
   private displayName = "";
   /** Event ids we sent, so `m.in_reply_to` on them reads as addressing us. */
   private sentEvents = new SentIds();
-  /** roomId -> joined member count, refreshed when membership changes. */
-  private memberCounts = new Map<string, number>();
+  /** roomId -> joined member count and when we counted it. */
+  private memberCounts = new Map<string, { count: number; at: number }>();
   private nextBatch: string | null = null;
   private running = false;
   private abort: AbortController | null = null;
@@ -145,6 +148,13 @@ export class MatrixInterface implements Interface {
         // Process new messages in joined rooms
         const joins = sync.rooms?.join || {};
         for (const [roomId, room] of Object.entries(joins)) {
+          // On a gappy (`limited`) sync the membership delta arrives in
+          // `state`, not the truncated timeline — drop the cached count so a
+          // room that became (or stopped being) a two-person conversation is
+          // recounted rather than judged from stale numbers.
+          if ((room.state?.events || []).some((ev) => ev.type === "m.room.member")) {
+            this.memberCounts.delete(roomId);
+          }
           const events = room.timeline?.events || [];
           for (const ev of events) {
             // Membership changed — our cached DM/group verdict may be stale.
@@ -218,11 +228,16 @@ export class MatrixInterface implements Interface {
     // observed and folded into the next addressed turn, so the agent keeps the
     // room's context without replying to messages meant for others.
     const channelKey = `matrix:${roomId}`;
-    const isGroup = !(await this.isDirectRoom(roomId));
-    if (isGroup && this.gate?.active && !this.isAddressed(text, event)) {
-      this.gate.observe(channelKey, sender, text);
-      log("matrix", `not addressed in ${roomId}, observing (${this.gate.pending(channelKey)} buffered)`);
-      return;
+    let isGroup = false;
+    if (this.gate?.active) {
+      // Only when gating is on — otherwise this costs a `joined_members` round
+      // trip per message for nothing.
+      isGroup = (await this.roomKind(roomId)) === "group";
+      if (isGroup && !this.isAddressed(text, event)) {
+        this.gate.observe(channelKey, sender, text);
+        log("matrix", `not addressed in ${roomId}, observing (${this.gate.pending(channelKey)} buffered)`);
+        return;
+      }
     }
 
     // Keep typing indicator alive while the turn runs (Matrix times out at ~30s)
@@ -296,25 +311,31 @@ export class MatrixInterface implements Interface {
   }
 
   /**
-   * Whether a room is a two-person conversation. Matrix has no DM flag on the
-   * room itself, so member count is the practical test: 2 or fewer joined
-   * members is a DM, more is a group. Cached and invalidated on membership
-   * events; on lookup failure we assume a group, which is the quieter default.
+   * Whether a room is a two-person conversation, a group, or not knowable right
+   * now. Matrix has no DM flag on the room itself, so member count is the
+   * practical test: 2 or fewer joined members is a DM, more is a group.
+   *
+   * Counts are cached with a short TTL and dropped on membership changes, so a
+   * room that gains or loses members is re-counted. A failed lookup returns
+   * `unknown` rather than a guess — the caller then leaves the message ungated,
+   * because guessing "group" would mute a DM the agent should have answered.
    */
-  private async isDirectRoom(roomId: string): Promise<boolean> {
+  private async roomKind(roomId: string): Promise<"dm" | "group" | "unknown"> {
     const cached = this.memberCounts.get(roomId);
-    if (cached !== undefined) return cached <= 2;
+    if (cached && Date.now() - cached.at < MEMBER_COUNT_TTL) {
+      return cached.count <= 2 ? "dm" : "group";
+    }
     try {
       const res = await this.api<{ joined?: Record<string, unknown> }>(
         "GET",
         `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/joined_members`,
       );
       const count = Object.keys(res?.joined || {}).length;
-      this.memberCounts.set(roomId, count);
-      return count <= 2;
+      this.memberCounts.set(roomId, { count, at: Date.now() });
+      return count <= 2 ? "dm" : "group";
     } catch (err: any) {
-      log.warn("matrix", `joined_members failed for ${roomId}, treating as group: ${err.message || err}`);
-      return false;
+      log.warn("matrix", `joined_members failed for ${roomId}, not gating: ${err.message || err}`);
+      return "unknown";
     }
   }
 
@@ -381,7 +402,8 @@ interface MatrixSync {
   rooms?: {
     invite?: Record<string, unknown>;
     join?: Record<string, {
-      timeline?: { events?: MatrixEvent[] };
+      timeline?: { events?: MatrixEvent[]; limited?: boolean };
+      state?: { events?: MatrixEvent[] };
     }>;
   };
 }

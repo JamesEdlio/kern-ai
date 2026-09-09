@@ -171,9 +171,19 @@ Two consequences worth knowing:
 - **Slash commands in groups need the mention too.** `/status@yourbot` works in
   a Telegram group; a bare `/status` is treated as room traffic. In a DM both
   work. (The `@yourbot` suffix is stripped before the command is parsed, which
-  it wasn't before.)
+  it wasn't before.) A command never gets the observed-messages block prefixed
+  to it — that would stop it looking like a command — so the buffer waits for
+  the next ordinary turn.
 - **Buffers are in-memory.** A restart drops observed-but-unanswered context;
-  the session and recall are unaffected.
+  the session and recall are unaffected. At most 200 channels are buffered at
+  once, least-recently-active evicted.
+- **Gating fails open.** If the agent can't tell a mention from room chatter —
+  Telegram `getMe` failed, Slack `auth.test`/`conversations.info` failed, Matrix
+  `joined_members` failed — the message is delivered as it was before rather
+  than swallowed, so a broken API call can never make the agent mute.
+- **Telegram groups don't hand out pairing codes for room traffic.** The gate
+  runs before the pairing check, so an unpaired member's unaddressed message
+  produces nothing at all. Mention the agent and the usual pairing code arrives.
 
 Set `mentionsOnly: false` to restore the previous behavior, where every group
 message started a turn and the model was merely asked (via the `NO_REPLY`

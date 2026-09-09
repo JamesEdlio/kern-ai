@@ -136,13 +136,20 @@ export class SlackInterface implements Interface {
       // Determine if DM or channel
       let channelName = channelId;
       let isDM = false;
+      // Whether we actually know which it is. A failed lookup used to only
+      // mislabel the channel; under gating it would silently mute a DM, so the
+      // unknown case passes through ungated.
+      let kindKnown = false;
       try {
         const info = await client.conversations.info({ channel: channelId });
         if (info.channel) {
           isDM = info.channel.is_im || false;
           channelName = isDM ? `slack-dm:${userId}` : `#${info.channel.name || channelId}`;
+          kindKnown = true;
         }
-      } catch {}
+      } catch (err: any) {
+        log.warn("slack", `conversations.info failed for ${channelId}, not gating: ${err.message || err}`);
+      }
 
       // Check pairing for DMs
       if (isDM && this.pairing && !this.pairing.isPaired(userId)) {
@@ -181,11 +188,16 @@ export class SlackInterface implements Interface {
       // conversation without speaking in it uninvited.
       // `botUserId` empty means auth.test() failed and we cannot recognize our
       // own mentions — pass everything through rather than going mute.
-      if (!isDM && this.gate?.active && this.botUserId && !addressed) {
+      if (!isDM && kindKnown && this.gate?.active && this.botUserId && !addressed) {
         this.gate.observe(channelKey, `<@${userId}>`, cleanText || "[media]");
         log("slack", `not addressed in ${channelName}, observing (${this.gate.pending(channelKey)} buffered)`);
         return;
       }
+
+      // We're taking a turn on this message. If it's in a thread, remember the
+      // thread — our reply goes to the channel, not the thread, so without this
+      // an in-thread follow-up would look unaddressed.
+      if (threadTs) this.sentTs.add(threadTs);
 
       // Fold anything observed in this channel since we last spoke into the
       // message the model sees.

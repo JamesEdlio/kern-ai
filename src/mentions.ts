@@ -38,6 +38,14 @@ export const MAX_OBSERVED_MESSAGES = 50;
 export const MAX_OBSERVED_CHARS = 500;
 
 /**
+ * Cap on how many channels hold a buffer at once. A bot can be added to
+ * unbounded groups, and a channel's buffer is only drained by the agent being
+ * addressed there, so without a cap an idle-but-chatty room would retain its
+ * window for the life of the process. Least-recently-observed is evicted.
+ */
+export const MAX_OBSERVED_CHANNELS = 200;
+
+/**
  * Holds the mentions-only policy and the per-channel observation buffers.
  *
  * One instance per agent process, created in `app.ts` from
@@ -76,6 +84,14 @@ export class MentionGate {
     if (!body) return;
 
     const buf = this.buffers.get(channelKey) || [];
+    // Re-insert so Map iteration order is least-recently-observed first.
+    this.buffers.delete(channelKey);
+    while (this.buffers.size >= MAX_OBSERVED_CHANNELS) {
+      const oldest = this.buffers.keys().next().value;
+      if (oldest === undefined) break;
+      this.buffers.delete(oldest);
+      this.dropped.delete(oldest);
+    }
     buf.push({
       sender,
       text: body.length > MAX_OBSERVED_CHARS
@@ -106,19 +122,20 @@ export class MentionGate {
     return { messages, dropped };
   }
 
-  /** Forget a channel's buffer without folding it in (e.g. on part/leave). */
-  clear(channelKey: string): void {
-    this.buffers.delete(channelKey);
-    this.dropped.delete(channelKey);
-  }
-
   /**
    * Prefix an addressed message with everything observed in that channel since
    * the agent last spoke there, and clear the buffer. Returns `text` unchanged
    * when gating is off or nothing was observed.
+   *
+   * Slash commands are left alone and keep their buffer: the command router
+   * matches on a leading `/`, so folding context in front of `/status` would
+   * turn it into an ordinary message — intermittently, depending on whether
+   * anything happened to be buffered. The context folds into the next real
+   * turn instead.
    */
   withContext(channelKey: string, text: string): string {
     if (!this.enabled) return text;
+    if (text.trim().startsWith("/")) return text;
     const { messages, dropped } = this.drain(channelKey);
     if (messages.length === 0) return text;
     return `${formatObserved(messages, dropped)}\n${text}`;
@@ -162,22 +179,6 @@ export function mentionsName(text: string, name: string): boolean {
   if (!n) return false;
   const edge = "[^\\w\\[\\]{}\\\\^`|-]";
   return new RegExp(`(^|${edge})@?${escapeRegex(n)}(${edge}|$)`, "i").test(text);
-}
-
-/**
- * Strip a leading address prefix (`vega: hi`, `@vega, hi`) and any inline
- * `@name` mentions, so the model reads the message rather than its own name.
- * Falls back to a placeholder when the mention *was* the whole message.
- */
-export function stripMention(text: string, name: string): string {
-  const n = name.trim();
-  if (!n) return text;
-  const escaped = escapeRegex(n);
-  const stripped = text
-    .replace(new RegExp(`^\\s*@?${escaped}\\s*[:,]?\\s*`, "i"), "")
-    .replace(new RegExp(`@${escaped}\\b`, "gi"), "")
-    .trim();
-  return stripped;
 }
 
 /** Text used when the agent is addressed with no message of its own. */
