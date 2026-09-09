@@ -3,6 +3,7 @@ import type { Attachment, Interface, StartOptions } from "./types.js";
 import type { PairingManager } from "../pairing.js";
 import { log } from "../log.js";
 import { isNoReply } from "../util.js";
+import { BARE_MENTION_TEXT, MentionGate, escapeRegex } from "../mentions.js";
 import { synthesizeSpeech, stripForSpeech, ttsAvailable } from "../tts.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -66,23 +67,74 @@ function guessMime(filename?: string, fallback = "application/octet-stream"): st
   return map[ext || ""] || fallback;
 }
 
+/** Best available human-readable label for a Telegram sender. */
+function senderName(from: { username?: string; first_name?: string; id: number }): string {
+  if (from.username) return `@${from.username}`;
+  if (from.first_name) return from.first_name;
+  return String(from.id);
+}
+
+/**
+ * Whether a group message is addressed to this bot.
+ *
+ * Three signals, all first-party Telegram ones rather than name matching:
+ * an `@username` mention (matched on the raw text, since captions and forwards
+ * don't reliably carry entities), a `text_mention` entity pointing at our user
+ * id (how clients link a bot that has no public username), and a reply to one
+ * of our own messages.
+ */
+export function isAddressedTo(
+  msg: any,
+  botId: number,
+  botUsername: string,
+): boolean {
+  if (!msg) return false;
+
+  // Reply to something we said
+  if (botId && msg.reply_to_message?.from?.id === botId) return true;
+
+  const entities = [...(msg.entities || []), ...(msg.caption_entities || [])];
+  for (const e of entities) {
+    if (e.type === "text_mention" && botId && e.user?.id === botId) return true;
+  }
+
+  if (!botUsername) return false;
+  const body = msg.text || msg.caption || "";
+  return new RegExp(`@${escapeRegex(botUsername)}\\b`, "i").test(body);
+}
+
 export class TelegramInterface implements Interface {
   private bot: Bot;
   private pairing: PairingManager | null;
   private showTools: boolean;
+  private gate: MentionGate | null;
+  /** Our own @username, resolved at start. Empty if getMe failed. */
+  private botUsername = "";
+  /** Our own numeric user id, used to spot replies to our messages. */
+  private botId = 0;
   private _status: "connected" | "disconnected" | "error" = "disconnected";
   private _statusDetail?: string;
 
-  constructor(token: string, pairing?: PairingManager, showTools = false) {
+  constructor(token: string, pairing?: PairingManager, showTools = false, gate?: MentionGate) {
     this.bot = new Bot(token);
     this.pairing = pairing || null;
     this.showTools = showTools;
+    this.gate = gate || null;
   }
 
   get status() { return this._status; }
   get statusDetail() { return this._statusDetail; }
 
   async start({ onMessage }: StartOptions): Promise<void> {
+    // Resolve our own identity so we can tell when a group message is for us
+    try {
+      const me = await this.bot.api.getMe();
+      this.botUsername = me.username || "";
+      this.botId = me.id;
+    } catch (err: any) {
+      log.warn("telegram", `getMe failed, mention detection degraded: ${err.message || err}`);
+    }
+
     // Register bot commands with Telegram
     this.bot.api.setMyCommands([
       { command: "status", description: "Show agent status" },
@@ -93,9 +145,11 @@ export class TelegramInterface implements Interface {
     this.bot.on("message", async (ctx) => {
       const userId = ctx.from.id;
       const chatId = ctx.chat.id.toString();
+      const isGroup = ctx.chat.type !== "private";
 
       // Extract text from message (could be caption for media messages)
-      const text = ctx.message.text || ctx.message.caption || "";
+      const rawText = ctx.message.text || ctx.message.caption || "";
+      let text = rawText;
 
       // Skip messages with no text and no media
       const hasMedia = !!(
@@ -128,6 +182,34 @@ export class TelegramInterface implements Interface {
             { parse_mode: "HTML" },
           );
           return;
+        }
+      }
+
+      // Group chats: only speak when addressed — an @mention of our username,
+      // a text_mention pointing at us, or a reply to one of our messages.
+      // Anything else is observed and folded into the next addressed turn, so
+      // we keep the conversation without answering messages meant for others.
+      const channelKey = `telegram:${chatId}`;
+      if (isGroup) {
+        const addressed = this.isAddressed(ctx);
+        // If getMe failed we cannot tell a mention from room chatter. Failing
+        // closed would make the agent mute in every group, so pass everything
+        // through instead — the prompt's NO_REPLY convention still applies.
+        const canDetect = Boolean(this.botId || this.botUsername);
+        if (this.gate?.active && canDetect && !addressed) {
+          const sender = senderName(ctx.from);
+          this.gate.observe(channelKey, sender, text || "[media]");
+          log("telegram", `not addressed in ${chatId}, observing (${this.gate.pending(channelKey)} buffered)`);
+          return;
+        }
+        if (addressed) {
+          // Strip our @username so the model reads the request, not its own
+          // name. Also normalizes `/status@bot` to `/status` for the slash
+          // command handler.
+          const stripped = this.botUsername
+            ? text.replace(new RegExp(`@${escapeRegex(this.botUsername)}\\b`, "gi"), "").replace(/\s{2,}/g, " ").trim()
+            : text.trim();
+          text = stripped || (hasMedia ? "" : BARE_MENTION_TEXT);
         }
       }
 
@@ -268,7 +350,7 @@ export class TelegramInterface implements Interface {
       try {
         const response = await onMessage(
           {
-            text: text || "",
+            text: (isGroup ? this.gate?.withContext(channelKey, text) : undefined) || text || "",
             userId: userId.toString(),
             chatId,
             interface: "telegram",
@@ -351,6 +433,10 @@ export class TelegramInterface implements Interface {
 
     log("telegram", "connected");
     this.startPolling();
+  }
+
+  private isAddressed(ctx: any): boolean {
+    return isAddressedTo(ctx.message, this.botId, this.botUsername);
   }
 
   private startPolling(): void {
