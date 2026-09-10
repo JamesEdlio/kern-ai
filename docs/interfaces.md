@@ -331,6 +331,30 @@ The agent's `npub` is logged at startup (`[nostr] identity npub1…`).
 - **No media, reactions, or typing indicators.** Plain text turns only.
 - **Relay size limits.** Public relays cap events around 64–100 KB; very long replies may be rejected by some relays (publish succeeds if any relay accepts).
 
+## Discord
+
+Direct integration via Discord Bot API gateway.
+
+### Setup
+
+1. Create a Discord application at the [Discord Developer Portal](https://discord.com/developers/applications).
+2. Create a Bot under the Application settings.
+3. Under **Privileged Gateway Intents**, enable **Message Content Intent**.
+4. In `.kern/.env`:
+   ```bash
+   DISCORD_TOKEN=your-discord-bot-token
+   ```
+5. Invite the bot to your server with permissions to View Channels, Send Messages, and Read Message History.
+6. Restart the agent.
+
+### Behavior
+
+- **Direct Messages (DMs)**: Gated by pairing (same flow as Telegram/Slack). Unpaired users receive a pairing code.
+- **Guild / Server Channels**: Responds when @mentioned (either direct user mention or via bot role). Set `"discordMentionOnly": false` in config or `DISCORD_MENTION_ONLY=false` in `.env` to receive all channel messages.
+- **Message Chunking**: Discord's 2,000-character limit is automatically split across clean message boundaries (newlines/spaces).
+- **Attachments**: Supports images, audio, video, and document uploads up to 25 MB.
+- **Outbound Messaging**: Send to Discord users or channels via the `message` tool with `interface: "discord"`.
+
 ## IRC
 
 Plain IRC — any network, or your own server on the tailnet. No dependencies beyond Node's `net`/`tls`: raw protocol with IRCv3 capability negotiation.
